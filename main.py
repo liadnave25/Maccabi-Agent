@@ -12,15 +12,54 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SITES_TO_SEARCH = [
+LOCAL_SITES = [
     "sport5.co.il",
     "one.co.il",
     "sport1.maariv.co.il",
     "sports.walla.co.il",
-    "ynet.co.il",
-    "euroleaguebasketball.net",
-    "basketnews.com"
+    "ynet.co.il"
 ]
+
+GLOBAL_BASKETBALL_SITES = [
+    "euroleaguebasketball.net",
+    "basketnews.com",
+    "eurohoops.net",
+    "sportando.basketball"
+]
+
+GLOBAL_FOOTBALL_SITES = [
+    "marca.com",
+    "gazzetta.it",
+    "skysports.com",
+    "theathletic.com"
+]
+
+SOURCE_TRUST_SCORES = {
+    # Official/Top Tier Global
+    "euroleaguebasketball.net": 100,
+    "theathletic.com": 90,
+    "skysports.com": 90,
+    
+    # Solid European Basketball
+    "basketnews.com": 85,
+    "eurohoops.net": 80,
+    
+    # Top Israeli Sports Media
+    "sport5.co.il": 85,
+    "one.co.il": 80,
+    
+    # General Israeli Media (Sports Sections)
+    "ynet.co.il": 75,
+    "sports.walla.co.il": 75,
+    "sport1.maariv.co.il": 70,
+    
+    # Rumor-Heavy Global Sites
+    "sportando.basketball": 60,
+    "marca.com": 55,
+    "gazzetta.it": 55
+}
+
+
 
 today_obj = datetime.date.today()
 yesterday_obj = today_obj - datetime.timedelta(days=1)
@@ -44,28 +83,44 @@ llm = LLM(
 
 # 2. Tools
 @tool("internet_search")
-def internet_search(category: str) -> str:
+def internet_search(query_data: str, scope: str = "local") -> str:
     """
     Searches Google via Serper API for the latest news.
-    MUST pass either 'Football' or 'Basketball' as the category.
+    USAGE INSTRUCTIONS FOR AGENTS:
+    - For daily local search: query_data must be 'Football' or 'Basketball', and scope must be 'local'.
+    - For global validation: query_data must be a batched string of player names like '("John Doe" OR "Jane Smith")', and scope must be 'global_basketball' or 'global_football'.
     """
     api_key = os.getenv("SERPER_API_KEY")
     url = "https://google.serper.dev/search"
     
-    sites_query = " OR ".join([f"site:{site}" for site in SITES_TO_SEARCH])
+    # 1. Routing: Choose the correct whitelist based on the requested scope
+    if scope == "global_basketball":
+        sites_list = GLOBAL_BASKETBALL_SITES
+    elif scope == "global_football":
+        sites_list = GLOBAL_FOOTBALL_SITES
+    else:
+        sites_list = LOCAL_SITES
+        
+    sites_query = " OR ".join([f"site:{site}" for site in sites_list])
     sites_formatted = f"({sites_query})"
     
-    if "basket" in category.lower():
-        q = f'מכבי תל אביב כדורסל {sites_formatted}'
+    # 2. Query Construction: Build the string sent to Google
+    if scope == "local":
+        # Standard daily Hebrew search
+        if "basket" in query_data.lower():
+            q = f'מכבי תל אביב כדורסל {sites_formatted}'
+        else:
+            q = f'מכבי תל אביב כדורגל {sites_formatted}'
     else:
-        q = f'מכבי תל אביב כדורגל {sites_formatted}'
+        # Global validation search using the batched English names
+        q = f'{query_data} "Maccabi Tel Aviv" {sites_formatted}'
         
-    print(f"\n🔍 Sending query to Google (Serper): {q}\n")
+    print(f"\n🔍 Sending query to Google (Serper) [Scope: {scope}]: {q}\n")
 
     payload = json.dumps({
       "q": q,
       "gl": "il",        
-      "hl": "iw",        
+      "hl": "iw", # נשאר iw כדי שגוגל יבין את ההקשר הגיאוגרפי, למרות שהשאילתה באנגלית        
       "tbs": "qdr:d",    
       "num": 15          
     })
@@ -83,14 +138,15 @@ def internet_search(category: str) -> str:
         for r in results:
             all_results.append(f"Title: {r.get('title')}\nLink: {r.get('link')}\nSnippet: {r.get('snippet')}\n---")
             
-        final_output = "\n".join(all_results) if all_results else f"No {category} news found in the last 24 hours."
+        final_output = "\n".join(all_results) if all_results else f"No results found for query: {query_data} in scope: {scope}"
         
-        # הדפסה לצורך דיבאג - ככה נראה מה הסוכן באמת קורא!
-        print(f"\n--- RAW SERPER RESULTS FOR {category.upper()} ---\n{final_output}\n---------------------------------------\n")
+        # הדפסה לדיבאג כדי שנוכל לראות בדיוק מה חזר מה-API
+        print(f"\n--- RAW SERPER RESULTS FOR SCOPE '{scope.upper()}' ---\n{final_output}\n---------------------------------------\n")
         
         return final_output
     except Exception as e:
         return f"Error executing Google Search: {e}"
+    
 
 # 3. Agents
 researcher = Agent(
@@ -100,9 +156,10 @@ researcher = Agent(
         f"You are a dedicated Maccabi Tel Aviv correspondent covering events from exactly {target_date_str} (yesterday). "
         "MANDATE: You must use the 'internet_search' tool TWICE. First with 'Football', then with 'Basketball'. "
         "CORE DIRECTIVE: You must bring me EVERY article from the last 24 hours where a Maccabi Tel Aviv player is explicitly mentioned. "
+        "ZERO-TRUST CLASSIFICATION RULE (CRITICAL): Do NOT trust the search query category to determine the sport! Israeli sports websites mix categories in their menus. You MUST classify each snippet based on its actual semantic content. If a result from the 'Football' search contains basketball terms (e.g., Euroleague, specific basketball teams, basketball coaches), you MUST route and group it under Basketball. Do NOT discard misplaced items; just move them to the correct sport's group. "
         "STRICT PROOF RULE: You only see short snippets. For a player to be included, the snippet MUST explicitly contain their full name AND a direct contextual link to Maccabi Tel Aviv (e.g., currently playing for or newly signing with the team). "
-        "RIVAL TEAM EXCLUSION (CRITICAL): Look closely at WHICH team the player is actually signing with or playing for. If the snippet mentions they joined, signed with, or play for 'Hapoel' (הפועל), 'Jerusalem', or ANY team other than Maccabi Tel Aviv, you MUST completely exclude them! 'Maccabi' must be their actual team, not just a passing mention. "
-        "ANTI-GUESSING RULE: NEVER infer identities from statistics, nicknames, or title suffixes (like 'The Fourth'). Only extract explicitly written names. "
+        "RIVAL TEAM EXCLUSION: Look closely at WHICH team the player is actually signing with or playing for. If the snippet mentions they joined, signed with, or play for 'Hapoel', 'Jerusalem', or ANY team other than Maccabi Tel Aviv, you MUST completely exclude them! "
+        "ANTI-GUESSING RULE: NEVER infer identities from statistics or nicknames. Only extract explicitly written names. "
         "Read the snippet context carefully! Completely IGNORE former players, alumni, or players who moved to other clubs. "
         "Collect injuries, match details, and press conference quotes."
     ),
@@ -111,16 +168,51 @@ researcher = Agent(
     verbose=True
 )
 
+validator = Agent(
+    role='Fact-Checker & Global Investigator',
+    goal='Analyze local news, calculate trust scores, and perform targeted global verification only when necessary.',
+    backstory=(
+        "You are the 'רעיון של שמש' (Sun's Ray) Engine, a highly analytical fact-checker and data router. "
+        "Your job is to process the raw news gathered by the Maccabi Specialist and assign a Confidence Score (0-100%).\n\n"
+        "SCORING LOGIC:\n"
+        "1. Base Score: Assign a base score using these weights: euroleaguebasketball.net=100, one.co.il=80, sport5.co.il=85, ynet.co.il=75, sports.walla.co.il=75.\n"
+        "2. Cross-Validation: If multiple Israeli sites report the EXACT same news, add +10% to the score. If they contradict, drop to 40%.\n\n"
+        "THE GATEKEEPER RULE (CRITICAL FOR API SAVING):\n"
+        "Do NOT use the internet_search tool for local Israeli news, match summaries, or quotes.\n"
+        "You MUST ONLY use the internet_search tool if:\n"
+        "A. A rumor involves a foreign player/coach OR an international transfer.\n"
+        "B. AND it is only reported by ONE local site (requires verification).\n\n"
+        "GLOBAL BATCH SEARCHING:\n"
+        "If you find multiple foreign rumors needing validation, you MUST combine their names into a SINGLE batched string like: '(\"Player One\" OR \"Player Two\")'. "
+        "Call internet_search exactly ONCE per sport with query_data=batched_string and scope='global_basketball' (or 'global_football').\n\n"
+        "OUTPUT FORMAT:\n"
+        "Compile a structured summary for the Editor. For each news item include:\n"
+        "- Entity (Player Name)\n"
+        "- Sport (Football/Basketball)\n"
+        "- Confidence Score (%)\n"
+        "- Tag ([CONFIRMED], [RUMOR], [GLOBAL SCOOP], or [CONFLICTING])\n"
+        "- Primary Source (CRITICAL: If multiple sites report the same news, pick exactly ONE site to be the cited source, strictly choosing the one with the highest Trust Score).\n"
+        "- The core verified text."
+    ),
+    llm=llm,
+    tools=[internet_search],
+    verbose=True
+)
+
 editor = Agent(
     role='Sports Newsletter Editor',
-    goal='Create a professional English newsletter strictly divided into Football and Basketball sections.',
+    goal='Create a professional English newsletter strictly divided into Football and Basketball sections, incorporating Trust Scores.',
     backstory=(
         f"You are a meticulous content curator. The official date of this report is {target_date_str}. "
         "CRITICAL RULE: The newsletter MUST have two main sections: '## ⚽ Maccabi Tel Aviv - Football' and '## 🏀 Maccabi Tel Aviv - Basketball'. "
         "Under EACH of these two sections, include three sub-headers: '### Press Conference Highlights', '### Player Spotlight', and '### Next Match'. "
-        "PLAYER SPOTLIGHT RULE: Strictly feature ONLY active, current players from the 2026 squad. If the raw data includes former players or anyone from the 2024 or 2025 seasons who left, you MUST filter them out and exclude them from the final report. "
-        "If no current player news is found for a specific section, simply state 'No new updates reported.' "
-        "NEXT MATCH ANTI-HALLUCINATION RULE: If the search results do not explicitly state the exact date of the next match, you MUST output: 'No upcoming match details reported today.' Do not guess, assume, or generate a date! Always preserve the original URLs."
+        "TRUST SCORE INTEGRATION: You will receive validated data from the 'רעיון של שמש' Validator. "
+        "For every news item you include, you MUST append its tag and confidence score at the end of the sentence (e.g., '...is in talks with the club. [RUMOR - 40%]' or '...has officially signed. [CONFIRMED - 95%]'). "
+        "FILTERING RULE: If an item has a confidence score strictly lower than 40% AND is tagged as [CONFLICTING], completely exclude it from the newsletter to prevent fake news. "
+        "SOURCE FIDELITY TRANSLATION RULE: Translate names EXACTLY as they appear. Do NOT invent first names. "
+        "PLAYER SPOTLIGHT RULE: Strictly feature ONLY active, current players from the 2026 squad. "
+        "NEXT MATCH ANTI-HALLUCINATION RULE: If not explicitly stated, output: 'No upcoming match details reported today.' Always preserve original URLs."
+        "SOURCE CITATION RULE: For every news item, you MUST naturally weave the primary source into the text so it sounds good on a podcast. For example: 'According to Sport5, [Player]...' or 'As reported by ONE, ...'. Strip away domain extensions for the audio (e.g., write 'Sport5' instead of 'sport5.co.il', 'BasketNews' instead of 'basketnews.com'). "
     ),
     llm=llm,
     verbose=True
@@ -137,20 +229,35 @@ research_task = Task(
     agent=researcher
 )
 
+validation_task = Task(
+    description=(
+        "1. Read the raw data collected by the researcher.\n"
+        "2. Group the data by player/entity to identify cross-reporting or contradictions.\n"
+        "3. Apply the scoring logic to calculate a Confidence Score for each item.\n"
+        "4. Decide if a global search is needed. If yes, batch the English names and execute ONE search per sport using the internet_search tool.\n"
+        "5. Update the final scores based on the global results.\n"
+        "6. Output the final graded list of news items."
+    ),
+    expected_output="A structured list of news items, each with a Confidence Score, a validation Tag, and verified text, ready for the Editor.",
+    agent=validator,
+    context=[research_task]
+)
+
 summary_task = Task(
     description=(
-        "Format the researcher's findings into the final Markdown newsletter. "
-        "Enforce the strict structure: Main headers for Football and Basketball, and the 3 sub-headers under each."
+        "Format the validator's findings into the final Markdown newsletter. "
+        "Enforce the strict structure: Main headers for Football and Basketball, and the 3 sub-headers under each. "
+        "Ensure every news item displays its validation tag and confidence score."
     ),
-    expected_output="A perfect Markdown newsletter with active links, ready for Telegram delivery.",
+    expected_output="A perfect Markdown newsletter with active links, validation scores, ready for Telegram delivery.",
     agent=editor,
-    context=[research_task]
+    context=[validation_task]
 )
 
 # 5. Crew & Execution
 maccabi_crew = Crew(
-    agents=[researcher, editor],
-    tasks=[research_task, summary_task],
+    agents=[researcher, validator, editor],
+    tasks=[research_task, validation_task, summary_task], 
     process=Process.sequential,
     verbose=True
 )
