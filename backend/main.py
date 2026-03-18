@@ -61,8 +61,6 @@ SOURCE_TRUST_SCORES = {
     "gazzetta.it": 55
 }
 
-
-
 today_obj = datetime.date.today()
 yesterday_obj = today_obj - datetime.timedelta(days=1)
 target_date_str = yesterday_obj.strftime("%B %d, %Y") 
@@ -122,7 +120,7 @@ def internet_search(query_data: str, scope: str = "local") -> str:
     payload = json.dumps({
       "q": q,
       "gl": "il",        
-      "hl": "iw", # נשאר iw כדי שגוגל יבין את ההקשר הגיאוגרפי, למרות שהשאילתה באנגלית        
+      "hl": "iw",        
       "tbs": "qdr:d",    
       "num": 15          
     })
@@ -142,7 +140,6 @@ def internet_search(query_data: str, scope: str = "local") -> str:
             
         final_output = "\n".join(all_results) if all_results else f"No results found for query: {query_data} in scope: {scope}"
         
-        # הדפסה לדיבאג כדי שנוכל לראות בדיוק מה חזר מה-API
         print(f"\n--- RAW SERPER RESULTS FOR SCOPE '{scope.upper()}' ---\n{final_output}\n---------------------------------------\n")
         
         return final_output
@@ -203,18 +200,25 @@ validator = Agent(
 
 editor = Agent(
     role='Sports Newsletter Editor',
-    goal='Create a professional English newsletter strictly divided into Football and Basketball sections, incorporating Trust Scores.',
+    goal='Format the final validated news into a strict JSON array format.',
     backstory=(
         f"You are a meticulous content curator. The official date of this report is {target_date_str}. "
-        "CRITICAL RULE: The newsletter MUST have two main sections: '## ⚽ Maccabi Tel Aviv - Football' and '## 🏀 Maccabi Tel Aviv - Basketball'. "
-        "Under EACH of these two sections, include three sub-headers: '### Press Conference Highlights', '### Player Spotlight', and '### Next Match'. "
         "TRUST SCORE INTEGRATION: You will receive validated data from the 'רעיון של שמש' Validator. "
-        "For every news item you include, you MUST append its tag and confidence score at the end of the sentence (e.g., '...is in talks with the club. [RUMOR - 40%]' or '...has officially signed. [CONFIRMED - 95%]'). "
-        "FILTERING RULE: If an item has a confidence score strictly lower than 40% AND is tagged as [CONFLICTING], completely exclude it from the newsletter to prevent fake news. "
-        "SOURCE FIDELITY TRANSLATION RULE: Translate names EXACTLY as they appear. Do NOT invent first names. "
+        "FILTERING RULE: If an item has a confidence score strictly lower than 40% AND is tagged as [CONFLICTING], completely exclude it from the final array to prevent fake news. "
         "PLAYER SPOTLIGHT RULE: Strictly feature ONLY active, current players from the 2026 squad. "
-        "NEXT MATCH ANTI-HALLUCINATION RULE: If not explicitly stated, output: 'No upcoming match details reported today.' Always preserve original URLs."
-        "SOURCE CITATION RULE: For every news item, you MUST naturally weave the primary source into the text so it sounds good on a podcast. For example: 'According to Sport5, [Player]...' or 'As reported by ONE, ...'. Strip away domain extensions for the audio (e.g., write 'Sport5' instead of 'sport5.co.il', 'BasketNews' instead of 'basketnews.com'). "
+        "CRITICAL JSON RULE: You MUST return the final result ONLY as a valid JSON array of objects. "
+        "Do NOT add any markdown formatting like ```json. Do NOT write any introduction or conclusion. Just return the raw array. "
+        "Each object in the array MUST strictly have these exact keys:\n"
+        "[\n"
+        "  {\n"
+        '    "title": "A short engaging headline for the app in Hebrew",\n'
+        '    "content": "A short summary of the article in Hebrew",\n'
+        '    "source": "The source of the news (e.g., ערוץ הספורט, ONE)",\n'
+        '    "reliability": "Choose exactly one: CONFIRMED, HIGH, MEDIUM, RUMOR, LOW, or FAKE",\n'
+        '    "link": "The URL to the original article",\n'
+        '    "sport_type": "Choose exactly one: כדורסל or כדורגל"\n'
+        "  }\n"
+        "]\n"
     ),
     llm=llm,
     verbose=True
@@ -247,11 +251,10 @@ validation_task = Task(
 
 summary_task = Task(
     description=(
-        "Format the validator's findings into the final Markdown newsletter. "
-        "Enforce the strict structure: Main headers for Football and Basketball, and the 3 sub-headers under each. "
-        "Ensure every news item displays its validation tag and confidence score."
+        "Format the validator's findings into the requested JSON array structure. "
+        "Ensure every news item has all the required JSON keys."
     ),
-    expected_output="A perfect Markdown newsletter with active links, validation scores, ready for Telegram delivery.",
+    expected_output="A perfect JSON array representing the news items, ready to be parsed by Python.",
     agent=editor,
     context=[validation_task]
 )
@@ -270,40 +273,48 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 VOICE_MODEL = "en-US-ChristopherNeural" 
 
-def deliver_podcast_and_text(newsletter_text):
-    print("\n🎙️ Generating Podcast... Please wait.")
+def deliver_podcast_and_text(news_items_list):
+    print("\n🎙️ Generating content for Telegram and Podcast...")
     audio_file = "maccabi_daily.mp3"
     
-    clean_audio_text = re.sub(r'\[.*?\]\(.*?\)', '', newsletter_text)
-    clean_audio_text = re.sub(r'http\S+', '', clean_audio_text)
-    clean_audio_text = clean_audio_text.replace('#', '').replace('*', '')
-    clean_audio_text = clean_audio_text.replace('⚽', 'Moving to Football.').replace('🏀', 'Moving to Basketball.')
+    # Building text format for Telegram and Audio from the JSON
+    telegram_message = f"🟡🔵 עדכון חדשות מכבי - {target_date_str} 🔵🟡\n\n"
+    audio_text = f"Maccabi Tel Aviv daily update for {target_date_str}. "
+    
+    for item in news_items_list:
+        # Build Telegram text
+        telegram_message += f"*{item.get('title', 'עדכון')}*\n"
+        telegram_message += f"ספורט: {item.get('sport_type', '')} | מקור: {item.get('source', '')} | אמינות: {item.get('reliability', '')}\n"
+        telegram_message += f"{item.get('content', '')}\n"
+        telegram_message += f"🔗 [לכתבה המלאה]({item.get('link', '')})\n\n"
+        
+        # Build Audio text (Keeping it simple for the TTS engine)
+        audio_text += f"In {item.get('sport_type', 'Sports')}: {item.get('title', '')}. {item.get('content', '')}. "
 
     async def create_audio():
-        communicate = edge_tts.Communicate(clean_audio_text, VOICE_MODEL)
+        communicate = edge_tts.Communicate(audio_text, VOICE_MODEL)
         await communicate.save(audio_file)
     
     asyncio.run(create_audio())
     print("✅ Podcast generated successfully!")
 
     print("📱 Sending text to Telegram...")
-    send_text_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    response_text = requests.post(send_text_url, data={"chat_id": CHAT_ID, "text": newsletter_text})
+    send_text_url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
+    requests.post(send_text_url, data={"chat_id": CHAT_ID, "text": telegram_message, "parse_mode": "Markdown"})
 
     print("🎧 Sending audio file to Telegram...")
-    send_audio_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendAudio"
+    send_audio_url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendAudio"
     with open(audio_file, "rb") as audio:
-        response_audio = requests.post(send_audio_url, data={"chat_id": CHAT_ID}, files={"audio": audio})
+        requests.post(send_audio_url, data={"chat_id": CHAT_ID}, files={"audio": audio})
     
     print("🚀 All done! Check your Telegram.")
 
 # --- Firebase Integration ---
-def upload_to_firebase(markdown_text, audio_file_path, date_str):
+def upload_to_firebase(news_items_list, audio_file_path, date_str):
     print("\n☁️ Connecting to Firebase...")
     
-    # 1. Initialize Firebase (Check if already initialized to prevent errors)
+    # 1. Initialize Firebase
     if not firebase_admin._apps:
-        # כאן אנחנו משתמשים במפתח ה-JSON שהורדנו
         cred = credentials.Certificate("firebase-key.json")
         firebase_admin.initialize_app(cred, {
             'storageBucket': 'maccabi-agent-app.firebasestorage.app' 
@@ -314,30 +325,27 @@ def upload_to_firebase(markdown_text, audio_file_path, date_str):
 
     # 2. Upload Audio to Storage
     print("🎧 Uploading podcast to Firebase Storage...")
-    blob = bucket.blob("latest_podcast.mp3") # השם תמיד זהה כדי לדרוס את של אתמול
+    blob = bucket.blob("latest_podcast.mp3") 
     blob.upload_from_filename(audio_file_path)
-    blob.make_public() # הופך את הלינק לפתוח כדי שהאפליקציה תוכל לנגן
+    blob.make_public() 
     audio_url = blob.public_url
     print(f"🔗 Audio URL generated: {audio_url}")
 
     # 3. Write Data to Firestore
     print("📝 Saving news to Firestore Database...")
     
-    # בשביל ה-MVP, אנחנו שומרים את כל המרקדאון כמקשה אחת יחד עם תאריך ולינק לאודיו. 
-    # ספריית Jetpack Compose באנדרואיד יודעת לקבל מרקדאון ולרנדר אותו יפה, 
-    # זה עדיף ופחות שביר מאשר לנסות לפרסר את הטקסט של ה-LLM עם Regex.
-    doc_data = {
-        "date": date_str,
-        "audio_url": audio_url,
-        "content": markdown_text,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    }
-    
-    # יוצר מסמך באוסף DailyNews, כאשר ה-ID של המסמך הוא התאריך (למשל "March 18, 2026")
-    doc_ref = db.collection("DailyNews").document(date_str)
-    doc_ref.set(doc_data)
-    
-    print("✅ Successfully uploaded all data to Firebase!")
+    # עוברים על כל כתבה מה-JSON ודוחפים אותה בנפרד למסד הנתונים
+    count = 0
+    for item in news_items_list:
+        # נוסיף לכל כתבה את הלינק לאודיו, התאריך וחותמת הזמן של השרת
+        item["audio_url"] = audio_url
+        item["date"] = date_str
+        item["timestamp"] = firestore.SERVER_TIMESTAMP
+        
+        db.collection("DailyNews").add(item)
+        count += 1
+        
+    print(f"✅ Successfully uploaded {count} news items to Firebase!")
 
 
 # --- Main Block ---
@@ -346,12 +354,23 @@ if __name__ == "__main__":
     try:
         result = maccabi_crew.kickoff()
         
-        print("\n--- FINAL REPORT ---\n")
-        print(result.raw)
+        print("\n--- RAW AI OUTPUT ---\n")
+        raw_output = str(result.raw)
+        print(raw_output)
         
-        deliver_podcast_and_text(result.raw)
-
-        upload_to_firebase(result.raw, "maccabi_daily.mp3", target_date_str)
+        # Parse the JSON output
+        # מנקים תגיות מרקדאון שלפעמים ה-AI מוסיף למרות שביקשנו שלא
+        clean_json_string = raw_output.replace("```json", "").replace("```", "").strip()
+        news_items = json.loads(clean_json_string)
         
+        print(f"\n✅ Successfully parsed {len(news_items)} news items from AI.")
+        
+        # Execute delivery and upload
+        deliver_podcast_and_text(news_items)
+        upload_to_firebase(news_items, "maccabi_daily.mp3", target_date_str)
+        
+    except json.JSONDecodeError as e:
+        print(f"\n❌ JSON Parsing Error: The AI did not return a valid JSON array. Error: {e}")
+        print("Please run the script again.")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"\n❌ An error occurred: {e}")

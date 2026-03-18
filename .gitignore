@@ -1,4 +1,22 @@
-venv/
-.env
-*.mp3
-firebase-key.json
+# --- Backend Server ---
+backend/.env
+backend/venv/
+backend/__pycache__/
+backend/firebase-key.json
+backend/*.mp3
+
+# --- Android App ---
+maccabiApp/.gradle/
+maccabiApp/build/
+maccabiApp/local.properties
+maccabiApp/captures/
+maccabiApp/.externalNativeBuild/
+maccabiApp/.cxx/
+maccabiApp/*.keystore
+maccabiApp/debug.keystore
+
+# --- General ---
+.DS_Store
+.idea/
+.vscode/
+*.log

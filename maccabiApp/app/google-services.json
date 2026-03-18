@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "995190558760",
+    "firebase_url": "https://maccabi-agent-app-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "maccabi-agent-app",
+    "storage_bucket": "maccabi-agent-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:995190558760:android:96c335d520fd65e4c1651d",
+        "android_client_info": {
+          "package_name": "com.example.maccabidailynews"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjr8DVlGmVQj20LOFMxEdPt3I0Z0GF0ao"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
