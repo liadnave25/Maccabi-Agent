@@ -9,6 +9,8 @@ import re
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, firestore, storage
 
 load_dotenv()
 
@@ -295,6 +297,48 @@ def deliver_podcast_and_text(newsletter_text):
     
     print("🚀 All done! Check your Telegram.")
 
+# --- Firebase Integration ---
+def upload_to_firebase(markdown_text, audio_file_path, date_str):
+    print("\n☁️ Connecting to Firebase...")
+    
+    # 1. Initialize Firebase (Check if already initialized to prevent errors)
+    if not firebase_admin._apps:
+        # כאן אנחנו משתמשים במפתח ה-JSON שהורדנו
+        cred = credentials.Certificate("firebase-key.json")
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': 'maccabi-agent-app.firebasestorage.app' 
+        })
+    
+    db = firestore.client()
+    bucket = storage.bucket()
+
+    # 2. Upload Audio to Storage
+    print("🎧 Uploading podcast to Firebase Storage...")
+    blob = bucket.blob("latest_podcast.mp3") # השם תמיד זהה כדי לדרוס את של אתמול
+    blob.upload_from_filename(audio_file_path)
+    blob.make_public() # הופך את הלינק לפתוח כדי שהאפליקציה תוכל לנגן
+    audio_url = blob.public_url
+    print(f"🔗 Audio URL generated: {audio_url}")
+
+    # 3. Write Data to Firestore
+    print("📝 Saving news to Firestore Database...")
+    
+    # בשביל ה-MVP, אנחנו שומרים את כל המרקדאון כמקשה אחת יחד עם תאריך ולינק לאודיו. 
+    # ספריית Jetpack Compose באנדרואיד יודעת לקבל מרקדאון ולרנדר אותו יפה, 
+    # זה עדיף ופחות שביר מאשר לנסות לפרסר את הטקסט של ה-LLM עם Regex.
+    doc_data = {
+        "date": date_str,
+        "audio_url": audio_url,
+        "content": markdown_text,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    }
+    
+    # יוצר מסמך באוסף DailyNews, כאשר ה-ID של המסמך הוא התאריך (למשל "March 18, 2026")
+    doc_ref = db.collection("DailyNews").document(date_str)
+    doc_ref.set(doc_data)
+    
+    print("✅ Successfully uploaded all data to Firebase!")
+
 
 # --- Main Block ---
 if __name__ == "__main__":
@@ -306,6 +350,8 @@ if __name__ == "__main__":
         print(result.raw)
         
         deliver_podcast_and_text(result.raw)
+
+        upload_to_firebase(result.raw, "maccabi_daily.mp3", target_date_str)
         
     except Exception as e:
         print(f"An error occurred: {e}")
