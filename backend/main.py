@@ -150,17 +150,17 @@ def internet_search(query_data: str, scope: str = "local") -> str:
 # 3. Agents
 researcher = Agent(
     role='Maccabi Specialist',
-    goal=f"Extract verified news, press conferences, and strictly CURRENT player mentions for {target_date_str}.",
+    goal=f"Extract verified news, press conferences, player updates, management news, and significant team events for {target_date_str}.",
     backstory=(
         f"You are a dedicated Maccabi Tel Aviv correspondent covering events from exactly {target_date_str} (yesterday). "
         "MANDATE: You must use the 'internet_search' tool TWICE. First with 'Football', then with 'Basketball'. "
-        "CORE DIRECTIVE: You must bring me EVERY article from the last 24 hours where a Maccabi Tel Aviv player is explicitly mentioned. "
+        "CORE DIRECTIVE: You must bring me EVERY article from the last 24 hours concerning Maccabi Tel Aviv's current players, coaches, management figures (e.g., Mitch Goldhar, Ben Mansford, Avi Even, Shimon Mizrahi), or major general team news (e.g., league decisions, stadiums). "
         "ZERO-TRUST CLASSIFICATION RULE (CRITICAL): Do NOT trust the search query category to determine the sport! Israeli sports websites mix categories in their menus. You MUST classify each snippet based on its actual semantic content. If a result from the 'Football' search contains basketball terms (e.g., Euroleague, specific basketball teams, basketball coaches), you MUST route and group it under Basketball. Do NOT discard misplaced items; just move them to the correct sport's group. "
-        "STRICT PROOF RULE: You only see short snippets. For a player to be included, the snippet MUST explicitly contain their full name AND a direct contextual link to Maccabi Tel Aviv (e.g., currently playing for or newly signing with the team). "
-        "RIVAL TEAM EXCLUSION: Look closely at WHICH team the player is actually signing with or playing for. If the snippet mentions they joined, signed with, or play for 'Hapoel', 'Jerusalem', or ANY team other than Maccabi Tel Aviv, you MUST completely exclude them! "
+        "STRICT PROOF RULE: You only see short snippets. For an item to be included, the snippet MUST explicitly contain a relevant name (player/coach/management) OR discuss significant official team news AND have a direct contextual link to Maccabi Tel Aviv. "
+        "RIVAL TEAM EXCLUSION: Look closely at WHICH team the player/figure is actually associated with. If the snippet mentions they joined, signed with, or play for 'Hapoel', 'Jerusalem', or ANY team other than Maccabi Tel Aviv, you MUST completely exclude them! "
         "ANTI-GUESSING RULE: NEVER infer identities from statistics or nicknames. Only extract explicitly written names. "
         "Read the snippet context carefully! Completely IGNORE former players, alumni, or players who moved to other clubs. "
-        "Collect injuries, match details, and press conference quotes."
+        "Collect injuries, match details, press conference quotes, and management/league updates."
     ),
     llm=llm,
     tools=[internet_search],
@@ -171,7 +171,7 @@ validator = Agent(
     role='Fact-Checker & Global Investigator',
     goal='Analyze local news, calculate trust scores, and perform targeted global verification only when necessary.',
     backstory=(
-        "You are the 'רעיון של שמש' (Sun's Ray) Engine, a highly analytical fact-checker and data router. "
+        "You are the MIA Fact-Checker Engine, a highly analytical fact-checker and data router. "
         "Your job is to process the raw news gathered by the Maccabi Specialist and assign a Confidence Score (0-100%).\n\n"
         "SCORING LOGIC:\n"
         "1. Base Score: Assign a base score using these weights: euroleaguebasketball.net=100, one.co.il=80, sport5.co.il=85, ynet.co.il=75, sports.walla.co.il=75.\n"
@@ -186,7 +186,7 @@ validator = Agent(
         "Call internet_search exactly ONCE per sport with query_data=batched_string and scope='global_basketball' (or 'global_football').\n\n"
         "OUTPUT FORMAT:\n"
         "Compile a structured summary for the Editor. For each news item include:\n"
-        "- Entity (Player Name)\n"
+        "- Entity (Player/Coach/Management/Event)\n"
         "- Sport (Football/Basketball)\n"
         "- Confidence Score (%)\n"
         "- Tag ([CONFIRMED], [RUMOR], [GLOBAL SCOOP], or [CONFLICTING])\n"
@@ -203,11 +203,12 @@ editor = Agent(
     goal='Format the final validated news into a strict JSON array format.',
     backstory=(
         f"You are a meticulous content curator. The official date of this report is {target_date_str}. "
-        "TRUST SCORE INTEGRATION: You will receive validated data from the 'רעיון של שמש' Validator. "
+        "TRUST SCORE INTEGRATION: You will receive validated data from the MIA Fact-Checker Validator. "
         "FILTERING RULE: If an item has a confidence score strictly lower than 40% AND is tagged as [CONFLICTING], completely exclude it from the final array to prevent fake news. "
-        "PLAYER SPOTLIGHT RULE: Strictly feature ONLY active, current players from the 2026 squad. "
+        "TEAM SPOTLIGHT RULE: Strictly feature ONLY active 2026 players, coaches, current management figures, and significant official team news. "
         "CRITICAL JSON RULE: You MUST return the final result ONLY as a valid JSON array of objects. "
         "Do NOT add any markdown formatting like ```json. Do NOT write any introduction or conclusion. Just return the raw array. "
+        "ESCAPING RULE (CRITICAL): NEVER use double quotes (\"\") inside your text values! If you need to quote someone, you MUST use single quotes (''). For example: write 'קטאש אמר: אנחנו לא בקצב', do NOT write \"קטאש אמר: \"אנחנו לא בקצב\"\". "
         "Each object in the array MUST strictly have these exact keys:\n"
         "[\n"
         "  {\n"
@@ -271,25 +272,29 @@ maccabi_crew = Crew(
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-VOICE_MODEL = "en-US-ChristopherNeural" 
+VOICE_MODEL = "he-IL-AvriNeural"
 
 def deliver_podcast_and_text(news_items_list):
     print("\n🎙️ Generating content for Telegram and Podcast...")
     audio_file = "maccabi_daily.mp3"
     
-    # Building text format for Telegram and Audio from the JSON
     telegram_message = f"🟡🔵 עדכון חדשות מכבי - {target_date_str} 🔵🟡\n\n"
-    audio_text = f"Maccabi Tel Aviv daily update for {target_date_str}. "
+    # משפט פתיחה מוכן בעברית לקריין
+    audio_text = f"עדכון חדשות מכבי היומי לתאריך {target_date_str}. "
     
-    for item in news_items_list:
-        # Build Telegram text
-        telegram_message += f"*{item.get('title', 'עדכון')}*\n"
-        telegram_message += f"ספורט: {item.get('sport_type', '')} | מקור: {item.get('source', '')} | אמינות: {item.get('reliability', '')}\n"
-        telegram_message += f"{item.get('content', '')}\n"
-        telegram_message += f"🔗 [לכתבה המלאה]({item.get('link', '')})\n\n"
-        
-        # Build Audio text (Keeping it simple for the TTS engine)
-        audio_text += f"In {item.get('sport_type', 'Sports')}: {item.get('title', '')}. {item.get('content', '')}. "
+    if not news_items_list:
+        telegram_message += "אין חדשות משמעותיות היום. נתראה מחר!\n"
+        audio_text += "אין חדשות משמעותיות היום. נתראה מחר!"
+    else:
+        for item in news_items_list:
+            # הרכבת הטקסט לטלגרם
+            telegram_message += f"*{item.get('title', 'עדכון')}*\n"
+            telegram_message += f"ספורט: {item.get('sport_type', '')} | מקור: {item.get('source', '')} | אמינות: {item.get('reliability', '')}\n"
+            telegram_message += f"{item.get('content', '')}\n"
+            telegram_message += f"🔗 [לכתבה המלאה]({item.get('link', '')})\n\n"
+            
+            # הרכבת הטקסט שהקריין יקריא באודיו
+            audio_text += f"ב{item.get('sport_type', 'ספורט')}: {item.get('title', '')}. {item.get('content', '')}. "
 
     async def create_audio():
         communicate = edge_tts.Communicate(audio_text, VOICE_MODEL)
@@ -299,17 +304,18 @@ def deliver_podcast_and_text(news_items_list):
     print("✅ Podcast generated successfully!")
 
     print("📱 Sending text to Telegram...")
-    send_text_url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
+    send_text_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(send_text_url, data={"chat_id": CHAT_ID, "text": telegram_message, "parse_mode": "Markdown"})
 
     print("🎧 Sending audio file to Telegram...")
-    send_audio_url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendAudio"
+    send_audio_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendAudio"
     with open(audio_file, "rb") as audio:
         requests.post(send_audio_url, data={"chat_id": CHAT_ID}, files={"audio": audio})
     
     print("🚀 All done! Check your Telegram.")
 
-# --- Firebase Integration ---
+
+# --- Firebase Integ
 def upload_to_firebase(news_items_list, audio_file_path, date_str):
     print("\n☁️ Connecting to Firebase...")
     
@@ -327,25 +333,40 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
     print("🎧 Uploading podcast to Firebase Storage...")
     blob = bucket.blob("latest_podcast.mp3") 
     blob.upload_from_filename(audio_file_path)
-    blob.make_public() 
-    audio_url = blob.public_url
+    
+    # יצירת לינק חתום ומאובטח
+    audio_url = blob.generate_signed_url(expiration=datetime.timedelta(days=365))
     print(f"🔗 Audio URL generated: {audio_url}")
 
     # 3. Write Data to Firestore
-    print("📝 Saving news to Firestore Database...")
+    print("📝 Saving news and podcast to Firestore...")
     
-    # עוברים על כל כתבה מה-JSON ודוחפים אותה בנפרד למסד הנתונים
+    # א. שמירת הפודקאסט במיקום קבוע במערכת
+    db.collection("System").document("LatestPodcast").set({
+        "audio_url": audio_url,
+        "date": date_str,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    })
+    print("✅ Podcast URL saved to System/LatestPodcast!")
+
+    # --- הפיצ'ר החדש: מחיקת הידיעות הישנות ---
+    print("🗑️ Cleaning up old news from DailyNews collection...")
+    old_news_docs = db.collection("DailyNews").stream()
+    deleted_count = 0
+    for doc in old_news_docs:
+        doc.reference.delete()
+        deleted_count += 1
+    print(f"✅ Deleted {deleted_count} old news items.")
+    # ------------------------------------------
+
     count = 0
     for item in news_items_list:
-        # נוסיף לכל כתבה את הלינק לאודיו, התאריך וחותמת הזמן של השרת
-        item["audio_url"] = audio_url
         item["date"] = date_str
         item["timestamp"] = firestore.SERVER_TIMESTAMP
-        
         db.collection("DailyNews").add(item)
         count += 1
         
-    print(f"✅ Successfully uploaded {count} news items to Firebase!")
+    print(f"✅ Successfully uploaded {count} NEW news items to Firebase!")
 
 
 # --- Main Block ---
@@ -358,8 +379,6 @@ if __name__ == "__main__":
         raw_output = str(result.raw)
         print(raw_output)
         
-        # Parse the JSON output
-        # מנקים תגיות מרקדאון שלפעמים ה-AI מוסיף למרות שביקשנו שלא
         clean_json_string = raw_output.replace("```json", "").replace("```", "").strip()
         news_items = json.loads(clean_json_string)
         

@@ -1,47 +1,31 @@
-package com.example.maccabidailynews
+package com.example.maccabidailynews // (ה-package שלך)
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.example.maccabidailynews.ui.theme.MaccabiDailyNewsTheme
+import dagger.hilt.android.AndroidEntryPoint
+import com.example.maccabidailynews.presentation.MainScreen
+import com.example.maccabidailynews.ui.theme.MaccabiDailyNewsTheme // (העיצוב שלך)
 
+@AndroidEntryPoint // <-- קריטי כדי ש-Hilt יעבוד!
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContent {
-            MaccabiDailyNewsTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
+            MaccabiDailyNewsTheme { // תשאיר פה את מה שהיה לך
+                // אובייקט Surface שנותן רקע על כל המסך
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    // כאן קוראים למערכת הניווט שלנו!
+                    MainScreen()
                 }
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    MaccabiDailyNewsTheme {
-        Greeting("Android")
     }
 }
