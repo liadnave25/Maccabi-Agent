@@ -21,3 +21,10 @@ maccabiApp/app/google-services.json
 .idea/
 .vscode/
 *.log
+
+# --- Markdown (exclude all except root README) ---
+*.md
+!README.md
+
+# --- Dev Scripts ---
+backend/openrouter_smoke_test.py

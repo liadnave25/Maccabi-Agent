@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -51,7 +52,8 @@ fun MainScreen(audioViewModel: AudioPlayerViewModel = viewModel()) {
 
                     NavigationBar(
                         containerColor = MaccabiDeepBlue,
-                        contentColor = MaccabiSoftYellow
+                        contentColor = MaccabiSoftYellow,
+                        tonalElevation = 8.dp
                     ) {
                         bottomNavItems.forEach { screen ->
                             NavigationBarItem(
@@ -60,7 +62,7 @@ fun MainScreen(audioViewModel: AudioPlayerViewModel = viewModel()) {
                                 selected = currentRoute == screen.route,
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = MaccabiDeepBlue,
-                                    unselectedIconColor = MaccabiSoftYellow.copy(alpha = 0.5f),
+                                    unselectedIconColor = MaccabiSoftYellow.copy(alpha = 0.6f),
                                     selectedTextColor = MaccabiSoftYellow,
                                     indicatorColor = MaccabiSoftYellow
                                 ),

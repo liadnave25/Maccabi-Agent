@@ -13,10 +13,10 @@ To automate the daily consumption of sports news by creating an end-to-end "rese
 This repository is structured as a Monorepo containing both the AI Backend and the Android Client.
 
 ### 1. 🧠 The Backend & AI Middleware (AWS EC2 / Python)
-* **The LLM Brain:** Powered by Gemini 2.5 Flash for high-speed, large-context processing of Google Search results.
-* **Maccabi Specialist (The Researcher):** Gathers "first-to-report" news using the Serper API from local whitelisted sites, utilizing semantic classification to bypass poorly categorized Israeli sports menus.
-* **The "רעיון של שמש" Engine (The Validator / Gatekeeper):** Groups news by entity and calculates a **Trust Score (0-100%)** based on a heuristic credibility dictionary. Detects consensus (+10% boost) or contradictions (drops to 40%, tagged `[CONFLICTING]`). Triggers targeted international API searches only when necessary to conserve quotas.
-* **Sports Newsletter Editor (The Writer):** Translates findings into professional Hebrew, naturally weaves in primary sources, and formats the final output into a strict **JSON array**. Items falling below the confidence threshold are automatically excluded to prevent hallucinations.
+* **The LLM Brain:** Powered by **OpenRouter** (configurable model, default: `nvidia/nemotron-3-super-120b-a12b:free`) — a unified API gateway routing requests to the best available free/paid LLMs.
+* **Maccabi Specialist (The Researcher):** Gathers "first-to-report" news using the Serper API from local and global whitelisted sites, utilizing semantic classification to bypass poorly categorized Israeli sports menus.
+* **The "רעיון של שמש" Engine (The Validator / Gatekeeper):** Groups news by entity and calculates a **Trust Score (0-100%)** using an advanced **Consensus Addition Model**. Instead of trusting a single source, it aggregates weights from multiple reports (e.g., Official=100, Fabrizio Romano=80, Top Local=35) capped at 100. It strictly enforces Anti-Hallucination rules (never merging distinct names) and detects semantic contradictions (halves the highest score, tagged `[CONFLICTING]`). Triggers targeted international API searches only when necessary to conserve quotas.
+* **Sports Newsletter Editor (The Writer):** Translates findings into professional Hebrew, naturally weaves in primary sources, and formats the final output into a strict **JSON array**. It acts as the final filter, excluding low-confidence/conflicting items and enforcing **Zero-Fabrication URL rules** to guarantee functional deep-linking.
 
 ### 2. ☁️ The Cloud Layer (Firebase)
 * **Cloud Firestore:** Acts as the NoSQL real-time database. The Python backend pushes the daily JSON array as individual documents (NewsItems), which the Android app listens to via Kotlin Flows.
@@ -30,7 +30,10 @@ This repository is structured as a Monorepo containing both the AI Backend and t
 
 ## 🛠️ Technical Solutions & Engineering Highlights
 
-* **API Optimization & Query Batching:** Reduced global search API calls from $O(N)$ to $O(1)$ by programming the Validator agent to aggregate entities into a single boolean `OR` string (e.g., `("Player A" OR "Player B")`).
+* **Consensus-Based Truth Engine:** Shifted from a static source-trust model to an additive consensus model to combat sports media clickbait. A single local source is tagged as a `[RUMOR]`, while cross-validated reports compound their scores to achieve `[CONFIRMED]` status.
+* **Anti-Hallucination Guardrails:** Implemented strict LLM directives to prevent the merging of distinct entities (e.g., confusing a current player with a former player) and absolute strictness on URL preservation to prevent the generation of fake links.
+* **API Rate Limit Management:** Handled Google Gemini's Free Tier RPM limits by injecting targeted delays (`time.sleep`) into the tool execution layer, ensuring stable, autonomous Cron job executions without HTTP 429 (Resource Exhausted) crashes.
+* **API Optimization & Query Batching:** Reduced global search API calls from O(N) to O(1) by programming the Validator agent to aggregate entities into a single boolean `OR` string (e.g., `("Player A" OR "Player B")`).
 * **Data Parsing & Schema Enforcement:** Transitioned the LLM output from unstructured Markdown to a strict JSON schema, enabling reliable NoSQL database population and structured UI rendering (Titles, Trust Badges, Source Links).
 * **The "Robot Reading URLs" Error (Regex Filtering):** Solved the issue of the TTS engine reading aloud complex URLs by implementing a Python `re` filter to create a clean text layer specifically for the audio generator.
 * **Cloud Migration & True Automation:** The backend runs 100% autonomously on an AWS EC2 Ubuntu Instance via a Linux `cron` job scheduled daily.
@@ -47,9 +50,21 @@ This repository is structured as a Monorepo containing both the AI Backend and t
 ### Backend Setup (`/backend`)
 ```bash
 pip install crewai edge-tts requests python-dotenv firebase-admin
-Environment Variables (.env): Requires GOOGLE_API_KEY, SERPER_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+```
 
-Firebase Credentials: Place the firebase-key.json service account file in the backend root directory.
+**Environment Variables (`.env`):** Create a `backend/.env` file with the following keys:
+```
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free   # or any OpenRouter model slug
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+SERPER_API_KEY=your_serper_api_key
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+```
+
+**Pre-flight check:** Run `python openrouter_smoke_test.py` from the `backend/` directory to verify your OpenRouter key and model are reachable before running the full pipeline.
+
+**Firebase Credentials:** Place the `firebase-key.json` service account file in the `backend/` root directory.
 
 Android Setup (/android)
 Open the /android folder in Android Studio.

@@ -4,6 +4,7 @@ import edge_tts
 import sys
 import datetime
 import requests
+import time
 import json
 import re
 from crewai import Agent, Task, Crew, Process, LLM
@@ -14,6 +15,12 @@ from firebase_admin import credentials, firestore, storage
 
 load_dotenv()
 
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "http://localhost")
+OPENROUTER_X_TITLE = os.getenv("OPENROUTER_X_TITLE", "Maccabi Backend")
+
 LOCAL_SITES = [
     "sport5.co.il",
     "one.co.il",
@@ -23,7 +30,7 @@ LOCAL_SITES = [
 ]
 
 GLOBAL_BASKETBALL_SITES = [
-    "euroleaguebasketball.net",
+    "euroleaguebasketball.net/euroleague",
     "basketnews.com",
     "eurohoops.net",
     "sportando.basketball"
@@ -33,52 +40,109 @@ GLOBAL_FOOTBALL_SITES = [
     "marca.com",
     "gazzetta.it",
     "skysports.com",
-    "theathletic.com"
+    "theathletic.com",
+    "x.com/FabrizioRomano"
 ]
 
 SOURCE_TRUST_SCORES = {
-    # Official/Top Tier Global
     "euroleaguebasketball.net": 100,
-    "theathletic.com": 90,
-    "skysports.com": 90,
-    
-    # Solid European Basketball
-    "basketnews.com": 85,
-    "eurohoops.net": 80,
-    
-    # Top Israeli Sports Media
-    "sport5.co.il": 85,
-    "one.co.il": 80,
-    
-    # General Israeli Media (Sports Sections)
-    "ynet.co.il": 75,
-    "sports.walla.co.il": 75,
-    "sport1.maariv.co.il": 70,
-    
-    # Rumor-Heavy Global Sites
-    "sportando.basketball": 60,
-    "marca.com": 55,
-    "gazzetta.it": 55
+    "x.com/FabrizioRomano": 80,
+    "sport5.co.il": 35,
+    "one.co.il": 35,
+    "sport1.maariv.co.il": 35,
+    "ynet.co.il": 25,
+    "sports.walla.co.il": 25,
+    "basketnews.com": 15,
+    "eurohoops.net": 15,
+    "sportando.basketball": 15,
+    "marca.com": 15,
+    "gazzetta.it": 15,
+    "skysports.com": 15,
+    "theathletic.com": 15
 }
 
 today_obj = datetime.date.today()
 yesterday_obj = today_obj - datetime.timedelta(days=1)
 target_date_str = yesterday_obj.strftime("%B %d, %Y") 
 
-REQUIRED_KEYS = ["GOOGLE_API_KEY", "SERPER_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+REQUIRED_KEYS = ["OPENROUTER_API_KEY", "SERPER_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
 for key in REQUIRED_KEYS:
     if not os.getenv(key):
         print(f"❌ Error: {key} is missing in .env file!")
         sys.exit(1)
 
-MY_KEY = os.getenv("GOOGLE_API_KEY")
-os.environ["GOOGLE_API_KEY"] = MY_KEY
-os.environ["GEMINI_API_KEY"] = MY_KEY
+class OpenRouterError(Exception):
+    """OpenRouter client error with optional status code for easier handling."""
+
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def openrouter_chat(messages, model=None, temperature=0, max_tokens=300):
+    """Send chat messages to OpenRouter and return only assistant text."""
+    if not OPENROUTER_API_KEY:
+        raise OpenRouterError("OPENROUTER_API_KEY is missing.")
+
+    endpoint = f"{OPENROUTER_BASE_URL}/chat/completions"
+    payload = {
+        "model": model or OPENROUTER_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": OPENROUTER_HTTP_REFERER,
+        "X-Title": OPENROUTER_X_TITLE,
+    }
+
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+    except requests.Timeout as e:
+        raise OpenRouterError("OpenRouter request timed out.") from e
+    except requests.RequestException as e:
+        raise OpenRouterError(f"OpenRouter network error: {e}") from e
+
+    if response.status_code == 401:
+        raise OpenRouterError("OpenRouter rejected the API key (401).", status_code=401)
+    if response.status_code == 429:
+        raise OpenRouterError("OpenRouter rate limit reached (429).", status_code=429)
+    if response.status_code >= 400:
+        body_preview = response.text[:500]
+        raise OpenRouterError(
+            f"OpenRouter error {response.status_code}: {body_preview}",
+            status_code=response.status_code,
+        )
+
+    data = response.json()
+    choices = data.get("choices", [])
+    if not choices:
+        raise OpenRouterError("OpenRouter response did not contain choices.")
+
+    assistant_text = choices[0].get("message", {}).get("content", "").strip()
+    if not assistant_text:
+        raise OpenRouterError("OpenRouter returned an empty assistant message.")
+    return assistant_text
+
+
+def smoke_test_openrouter():
+    """Run a minimal connectivity test before long-running jobs."""
+    probe = openrouter_chat(
+        messages=[{"role": "user", "content": "Reply with exactly: OPENROUTER_OK"}],
+        max_tokens=20,
+    )
+    if "OPENROUTER_OK" not in probe:
+        raise OpenRouterError(f"Smoke test returned unexpected content: {probe}")
+    print(f"✅ OpenRouter smoke test passed with model: {OPENROUTER_MODEL}")
 
 llm = LLM(
-    model="gemini/gemini-2.5-flash", 
-    api_key=MY_KEY,
-    temperature=0 
+    model=f"openrouter/{OPENROUTER_MODEL}",
+    api_key=OPENROUTER_API_KEY,
+    base_url=OPENROUTER_BASE_URL,
+    temperature=0,
+    max_retries=3
 )
 
 # 2. Tools
@@ -90,6 +154,7 @@ def internet_search(query_data: str, scope: str = "local") -> str:
     - For daily local search: query_data must be 'Football' or 'Basketball', and scope must be 'local'.
     - For global validation: query_data must be a batched string of player names like '("John Doe" OR "Jane Smith")', and scope must be 'global_basketball' or 'global_football'.
     """
+    time.sleep(15)  # To respect rate limits
     api_key = os.getenv("SERPER_API_KEY")
     url = "https://google.serper.dev/search"
     
@@ -169,34 +234,49 @@ researcher = Agent(
 
 validator = Agent(
     role='Fact-Checker & Global Investigator',
-    goal='Analyze local news, calculate trust scores, and perform targeted global verification only when necessary.',
+    goal='Analyze local news, calculate trust scores using a consensus addition model, and perform targeted global verification only when necessary.',
     backstory=(
         "You are the MIA Fact-Checker Engine, a highly analytical fact-checker and data router. "
         "Your job is to process the raw news gathered by the Maccabi Specialist and assign a Confidence Score (0-100%).\n\n"
-        "SCORING LOGIC:\n"
-        "1. Base Score: Assign a base score using these weights: euroleaguebasketball.net=100, one.co.il=80, sport5.co.il=85, ynet.co.il=75, sports.walla.co.il=75.\n"
-        "2. Cross-Validation: If multiple Israeli sites report the EXACT same news, add +10% to the score. If they contradict, drop to 40%.\n\n"
+        "ANTI-HALLUCINATION RULE (CRITICAL): You must NEVER translate names, guess identities, or merge distinct individuals into one entity! "
+        "If a snippet contains multiple different names, treat them as completely separate people. "
+        "DO NOT assume one name is a nickname, alias, or English translation of another. "
+        "If the Hebrew syntax makes it ambiguous to determine which person performed the action, completely DROP the item or extract only the explicitly clear facts.\n\n"
+        "FORMER PLAYER RULE (CRITICAL FILTER): If the news focuses on a FORMER Maccabi player or coach who is no longer active in the club, you MUST drop the item completely. THE ONLY EXCEPTION is if the snippet explicitly indicates an interview with them (e.g., using words like 'ראיון', 'התראיין', 'מדבר').\n\n"
+        "NEW CONSENSUS SCORING LOGIC:\n"
+        "1. Base Weights per Source:\n"
+        "   - euroleaguebasketball.net/euroleague: 100\n"
+        "   - x.com/FabrizioRomano: 80\n"
+        "   - sport5.co.il, one.co.il, sport1.maariv.co.il: 35 each\n"
+        "   - ynet.co.il, sports.walla.co.il: 25 each\n"
+        "   - Any other global site (basketnews, marca, etc.): 15 each\n"
+        "2. DIRECT QUOTE BONUS: Add +15 points to the score if the snippet contains a direct quote (in quotation marks) from a figure, OR uses official definitive words like 'רשמי', 'חתם', 'הודיעה'.\n"
+        "3. Calculation: If an identical story is reported by multiple sites, SUM their weights. Cap the final score at maximum 100. (e.g., sport5 + one = 35+35=70).\n"
+        "4. Tags based on SUM:\n"
+        "   - 0 to 39: tag as [RUMOR]\n"
+        "   - 40 to 69: tag as [MEDIUM]\n"
+        "   - 70 to 100: tag as [CONFIRMED]\n"
+        "5. CONFLICTING REPORTS (CRITICAL): If sources explicitly contradict each other (e.g., one says 'signed', another says 'deal collapsed'), DO NOT sum them. Instead, cut the highest score by half and tag it as [CONFLICTING].\n\n"
         "THE GATEKEEPER RULE (CRITICAL FOR API SAVING):\n"
         "Do NOT use the internet_search tool for local Israeli news, match summaries, or quotes.\n"
         "You MUST ONLY use the internet_search tool if:\n"
         "A. A rumor involves a foreign player/coach OR an international transfer.\n"
         "B. AND it is only reported by ONE local site (requires verification).\n\n"
-        "GLOBAL BATCH SEARCHING:\n"
-        "If you find multiple foreign rumors needing validation, you MUST combine their names into a SINGLE batched string like: '(\"Player One\" OR \"Player Two\")'. "
-        "Call internet_search exactly ONCE per sport with query_data=batched_string and scope='global_basketball' (or 'global_football').\n\n"
         "OUTPUT FORMAT:\n"
         "Compile a structured summary for the Editor. For each news item include:\n"
         "- Entity (Player/Coach/Management/Event)\n"
         "- Sport (Football/Basketball)\n"
         "- Confidence Score (%)\n"
-        "- Tag ([CONFIRMED], [RUMOR], [GLOBAL SCOOP], or [CONFLICTING])\n"
-        "- Primary Source (CRITICAL: If multiple sites report the same news, pick exactly ONE site to be the cited source, strictly choosing the one with the highest Trust Score).\n"
+        "- Tag ([CONFIRMED], [MEDIUM], [RUMOR], or [CONFLICTING])\n"
+        "- Primary Source (The site with the highest Trust Score)\n"
+        "- Exact URL Link (CRITICAL: You MUST copy the exact original 'Link' from the search results! Do not lose it!)\n"
         "- The core verified text."
     ),
     llm=llm,
     tools=[internet_search],
     verbose=True
 )
+
 
 editor = Agent(
     role='Sports Newsletter Editor',
@@ -205,10 +285,12 @@ editor = Agent(
         f"You are a meticulous content curator. The official date of this report is {target_date_str}. "
         "TRUST SCORE INTEGRATION: You will receive validated data from the MIA Fact-Checker Validator. "
         "FILTERING RULE: If an item has a confidence score strictly lower than 40% AND is tagged as [CONFLICTING], completely exclude it from the final array to prevent fake news. "
+        "STRICT SPORT RULE: You are strictly forbidden from including news about Volleyball (כדורעף), Handball (כדוריד), or any sport other than Football and Basketball. If an item is not Football or Basketball, you MUST drop it."
         "TEAM SPOTLIGHT RULE: Strictly feature ONLY active 2026 players, coaches, current management figures, and significant official team news. "
+        "URL RULE (CRITICAL): You MUST keep the EXACT original 'link' URL provided by the MIA Fact-Checker. DO NOT modify, shorten, or generate fake/sequential URLs (like /item/123456). Use the raw URL exactly as received. "
         "CRITICAL JSON RULE: You MUST return the final result ONLY as a valid JSON array of objects. "
         "Do NOT add any markdown formatting like ```json. Do NOT write any introduction or conclusion. Just return the raw array. "
-        "ESCAPING RULE (CRITICAL): NEVER use double quotes (\"\") inside your text values! If you need to quote someone, you MUST use single quotes (''). For example: write 'קטאש אמר: אנחנו לא בקצב', do NOT write \"קטאש אמר: \"אנחנו לא בקצב\"\". "
+        "ESCAPING RULE (CRITICAL): NEVER use double quotes (\"\") inside your text values! If you need to quote someone, you MUST use single quotes (''). "
         "Each object in the array MUST strictly have these exact keys:\n"
         "[\n"
         "  {\n"
@@ -216,7 +298,7 @@ editor = Agent(
         '    "content": "A short summary of the article in Hebrew",\n'
         '    "source": "The source of the news (e.g., ערוץ הספורט, ONE)",\n'
         '    "reliability": "Choose exactly one: CONFIRMED, HIGH, MEDIUM, RUMOR, LOW, or FAKE",\n'
-        '    "link": "The URL to the original article",\n'
+        '    "link": "The exact unmodified URL to the original article",\n'
         '    "sport_type": "Choose exactly one: כדורסל or כדורגל"\n'
         "  }\n"
         "]\n"
@@ -265,6 +347,7 @@ maccabi_crew = Crew(
     agents=[researcher, validator, editor],
     tasks=[research_task, validation_task, summary_task], 
     process=Process.sequential,
+    max_rpm=10,
     verbose=True
 )
 
@@ -373,23 +456,52 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
 if __name__ == "__main__":
     print(f"--- Starting Maccabi Agentic System for Target Date: {target_date_str} ---")
     try:
-        result = maccabi_crew.kickoff()
-        
-        print("\n--- RAW AI OUTPUT ---\n")
-        raw_output = str(result.raw)
-        print(raw_output)
-        
-        clean_json_string = raw_output.replace("```json", "").replace("```", "").strip()
-        news_items = json.loads(clean_json_string)
-        
-        print(f"\n✅ Successfully parsed {len(news_items)} news items from AI.")
-        
-        # Execute delivery and upload
-        deliver_podcast_and_text(news_items)
-        upload_to_firebase(news_items, "maccabi_daily.mp3", target_date_str)
-        
-    except json.JSONDecodeError as e:
-        print(f"\n❌ JSON Parsing Error: The AI did not return a valid JSON array. Error: {e}")
-        print("Please run the script again.")
-    except Exception as e:
-        print(f"\n❌ An error occurred: {e}")
+        smoke_test_openrouter()
+    except OpenRouterError as e:
+        print(f"❌ OpenRouter startup check failed: {e}")
+        sys.exit(1)
+    
+    max_attempts = 4  # הגדלנו ל-4 ניסיונות
+    attempt = 1
+    success = False
+    
+    while attempt <= max_attempts and not success:
+        try:
+            print(f"\n🚀 Attempt {attempt} of {max_attempts}...")
+            result = maccabi_crew.kickoff()
+            
+            print("\n--- RAW AI OUTPUT ---\n")
+            raw_output = str(result.raw)
+            print(raw_output)
+            
+            clean_json_string = raw_output.replace("```json", "").replace("```", "").strip()
+            news_items = json.loads(clean_json_string)
+
+            valid_sports = ["כדורסל", "כדורגל"]
+            news_items = [item for item in news_items if item.get("sport_type") in valid_sports]
+            
+            print(f"\n✅ Successfully parsed {len(news_items)} news items from AI.")
+            
+            # Execute delivery and upload
+            deliver_podcast_and_text(news_items)
+            upload_to_firebase(news_items, "maccabi_daily.mp3", target_date_str)
+            
+            success = True # הצלחנו! יוצאים מהלולאה
+            
+        except json.JSONDecodeError as e:
+            print(f"\n❌ JSON Parsing Error on attempt {attempt}. Error: {e}")
+            if attempt < max_attempts:
+                print("⏳ Waiting 60 seconds before retrying...")
+                time.sleep(60) # פה מספיק דקה כי זו שגיאה של הפורמט, לא של השרת
+            attempt += 1
+            
+        except Exception as e:
+            print(f"\n❌ An error occurred on attempt {attempt} (e.g., Google 503 Overload): {e}")
+            if attempt < max_attempts:
+                # התיקון הגדול: מחכים 5 דקות כדי לתת לגוגל להתאושש
+                print("⏳ Google servers might be heavily loaded. Waiting 5 minutes (300 seconds) before retrying...")
+                time.sleep(300) 
+            attempt += 1
+            
+    if not success:
+        print("\n❌ All attempts failed. The system is giving up for today.")
