@@ -15,12 +15,6 @@ from firebase_admin import credentials, firestore, storage
 
 load_dotenv()
 
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "http://localhost")
-OPENROUTER_X_TITLE = os.getenv("OPENROUTER_X_TITLE", "Maccabi Backend")
-
 LOCAL_SITES = [
     "sport5.co.il",
     "one.co.il",
@@ -65,82 +59,20 @@ today_obj = datetime.date.today()
 yesterday_obj = today_obj - datetime.timedelta(days=1)
 target_date_str = yesterday_obj.strftime("%B %d, %Y") 
 
-REQUIRED_KEYS = ["OPENROUTER_API_KEY", "SERPER_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+# חזרנו לדרוש רק את המפתחות המקוריים
+REQUIRED_KEYS = ["GOOGLE_API_KEY", "SERPER_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
 for key in REQUIRED_KEYS:
     if not os.getenv(key):
         print(f"❌ Error: {key} is missing in .env file!")
         sys.exit(1)
 
-class OpenRouterError(Exception):
-    """OpenRouter client error with optional status code for easier handling."""
-
-    def __init__(self, message, status_code=None):
-        super().__init__(message)
-        self.status_code = status_code
-
-
-def openrouter_chat(messages, model=None, temperature=0, max_tokens=300):
-    """Send chat messages to OpenRouter and return only assistant text."""
-    if not OPENROUTER_API_KEY:
-        raise OpenRouterError("OPENROUTER_API_KEY is missing.")
-
-    endpoint = f"{OPENROUTER_BASE_URL}/chat/completions"
-    payload = {
-        "model": model or OPENROUTER_MODEL,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": OPENROUTER_HTTP_REFERER,
-        "X-Title": OPENROUTER_X_TITLE,
-    }
-
-    try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=45)
-    except requests.Timeout as e:
-        raise OpenRouterError("OpenRouter request timed out.") from e
-    except requests.RequestException as e:
-        raise OpenRouterError(f"OpenRouter network error: {e}") from e
-
-    if response.status_code == 401:
-        raise OpenRouterError("OpenRouter rejected the API key (401).", status_code=401)
-    if response.status_code == 429:
-        raise OpenRouterError("OpenRouter rate limit reached (429).", status_code=429)
-    if response.status_code >= 400:
-        body_preview = response.text[:500]
-        raise OpenRouterError(
-            f"OpenRouter error {response.status_code}: {body_preview}",
-            status_code=response.status_code,
-        )
-
-    data = response.json()
-    choices = data.get("choices", [])
-    if not choices:
-        raise OpenRouterError("OpenRouter response did not contain choices.")
-
-    assistant_text = choices[0].get("message", {}).get("content", "").strip()
-    if not assistant_text:
-        raise OpenRouterError("OpenRouter returned an empty assistant message.")
-    return assistant_text
-
-
-def smoke_test_openrouter():
-    """Run a minimal connectivity test before long-running jobs."""
-    probe = openrouter_chat(
-        messages=[{"role": "user", "content": "Reply with exactly: OPENROUTER_OK"}],
-        max_tokens=20,
-    )
-    if "OPENROUTER_OK" not in probe:
-        raise OpenRouterError(f"Smoke test returned unexpected content: {probe}")
-    print(f"✅ OpenRouter smoke test passed with model: {OPENROUTER_MODEL}")
+# חיבור ישיר ל-Gemini
+MY_KEY = os.getenv("GOOGLE_API_KEY")
+os.environ["GEMINI_API_KEY"] = MY_KEY
 
 llm = LLM(
-    model=f"openrouter/{OPENROUTER_MODEL}",
-    api_key=OPENROUTER_API_KEY,
-    base_url=OPENROUTER_BASE_URL,
+    model="gemini/gemini-2.5-flash-lite", 
+    api_key=MY_KEY,
     temperature=0,
     max_retries=3
 )
@@ -277,7 +209,6 @@ validator = Agent(
     verbose=True
 )
 
-
 editor = Agent(
     role='Sports Newsletter Editor',
     goal='Format the final validated news into a strict JSON array format.',
@@ -347,7 +278,7 @@ maccabi_crew = Crew(
     agents=[researcher, validator, editor],
     tasks=[research_task, validation_task, summary_task], 
     process=Process.sequential,
-    max_rpm=10,
+    max_rpm=10, # ההגבלה הקריטית נגד שגיאות 429
     verbose=True
 )
 
@@ -362,7 +293,6 @@ def deliver_podcast_and_text(news_items_list):
     audio_file = "maccabi_daily.mp3"
     
     telegram_message = f"🟡🔵 עדכון חדשות מכבי - {target_date_str} 🔵🟡\n\n"
-    # משפט פתיחה מוכן בעברית לקריין
     audio_text = f"עדכון חדשות מכבי היומי לתאריך {target_date_str}. "
     
     if not news_items_list:
@@ -370,13 +300,11 @@ def deliver_podcast_and_text(news_items_list):
         audio_text += "אין חדשות משמעותיות היום. נתראה מחר!"
     else:
         for item in news_items_list:
-            # הרכבת הטקסט לטלגרם
             telegram_message += f"*{item.get('title', 'עדכון')}*\n"
             telegram_message += f"ספורט: {item.get('sport_type', '')} | מקור: {item.get('source', '')} | אמינות: {item.get('reliability', '')}\n"
             telegram_message += f"{item.get('content', '')}\n"
             telegram_message += f"🔗 [לכתבה המלאה]({item.get('link', '')})\n\n"
             
-            # הרכבת הטקסט שהקריין יקריא באודיו
             audio_text += f"ב{item.get('sport_type', 'ספורט')}: {item.get('title', '')}. {item.get('content', '')}. "
 
     async def create_audio():
@@ -398,11 +326,10 @@ def deliver_podcast_and_text(news_items_list):
     print("🚀 All done! Check your Telegram.")
 
 
-# --- Firebase Integ
+# --- Firebase Integration ---
 def upload_to_firebase(news_items_list, audio_file_path, date_str):
     print("\n☁️ Connecting to Firebase...")
     
-    # 1. Initialize Firebase
     if not firebase_admin._apps:
         cred = credentials.Certificate("firebase-key.json")
         firebase_admin.initialize_app(cred, {
@@ -412,19 +339,15 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
     db = firestore.client()
     bucket = storage.bucket()
 
-    # 2. Upload Audio to Storage
     print("🎧 Uploading podcast to Firebase Storage...")
     blob = bucket.blob("latest_podcast.mp3") 
     blob.upload_from_filename(audio_file_path)
     
-    # יצירת לינק חתום ומאובטח
     audio_url = blob.generate_signed_url(expiration=datetime.timedelta(days=365))
     print(f"🔗 Audio URL generated: {audio_url}")
 
-    # 3. Write Data to Firestore
     print("📝 Saving news and podcast to Firestore...")
     
-    # א. שמירת הפודקאסט במיקום קבוע במערכת
     db.collection("System").document("LatestPodcast").set({
         "audio_url": audio_url,
         "date": date_str,
@@ -432,7 +355,6 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
     })
     print("✅ Podcast URL saved to System/LatestPodcast!")
 
-    # --- הפיצ'ר החדש: מחיקת הידיעות הישנות ---
     print("🗑️ Cleaning up old news from DailyNews collection...")
     old_news_docs = db.collection("DailyNews").stream()
     deleted_count = 0
@@ -440,7 +362,6 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
         doc.reference.delete()
         deleted_count += 1
     print(f"✅ Deleted {deleted_count} old news items.")
-    # ------------------------------------------
 
     count = 0
     for item in news_items_list:
@@ -455,13 +376,8 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
 # --- Main Block ---
 if __name__ == "__main__":
     print(f"--- Starting Maccabi Agentic System for Target Date: {target_date_str} ---")
-    try:
-        smoke_test_openrouter()
-    except OpenRouterError as e:
-        print(f"❌ OpenRouter startup check failed: {e}")
-        sys.exit(1)
     
-    max_attempts = 4  # הגדלנו ל-4 ניסיונות
+    max_attempts = 4  
     attempt = 1
     success = False
     
@@ -482,24 +398,22 @@ if __name__ == "__main__":
             
             print(f"\n✅ Successfully parsed {len(news_items)} news items from AI.")
             
-            # Execute delivery and upload
             deliver_podcast_and_text(news_items)
             upload_to_firebase(news_items, "maccabi_daily.mp3", target_date_str)
             
-            success = True # הצלחנו! יוצאים מהלולאה
+            success = True 
             
         except json.JSONDecodeError as e:
             print(f"\n❌ JSON Parsing Error on attempt {attempt}. Error: {e}")
             if attempt < max_attempts:
                 print("⏳ Waiting 60 seconds before retrying...")
-                time.sleep(60) # פה מספיק דקה כי זו שגיאה של הפורמט, לא של השרת
+                time.sleep(60) 
             attempt += 1
             
         except Exception as e:
             print(f"\n❌ An error occurred on attempt {attempt} (e.g., Google 503 Overload): {e}")
             if attempt < max_attempts:
-                # התיקון הגדול: מחכים 5 דקות כדי לתת לגוגל להתאושש
-                print("⏳ Google servers might be heavily loaded. Waiting 5 minutes (300 seconds) before retrying...")
+                print("⏳ Google servers might be heavily loaded or rate limited. Waiting 5 minutes (300 seconds) before retrying...")
                 time.sleep(300) 
             attempt += 1
             
