@@ -45,6 +45,40 @@ This repository is structured as a Monorepo containing both the AI Backend and t
 * **Push Notifications:** Integrate Firebase Cloud Messaging (FCM) to trigger mobile notifications when "Breaking News" (high-confidence score transfers/firings) is detected.
 * **Advanced Telegram Interactions:** Upgrade the bot from a "broadcast-only" channel to an interactive agent (RAG) where the user can reply and ask follow-up questions.
 
+## 🧪 Testing (Backend)
+
+The backend has a full pytest suite covering the four core components of `main.py` with all external APIs mocked (no real Serper, Gemini, Telegram, or Firebase calls).
+
+### Install test dependencies
+```bash
+cd backend
+pip install -r requirements-dev.txt
+```
+
+### Run all tests
+```bash
+cd backend
+pytest
+```
+
+### Run a single test file
+```bash
+pytest tests/test_json_extraction.py
+pytest tests/test_internet_search.py -v
+```
+
+### Test coverage breakdown
+
+| File | What it covers |
+|------|---------------|
+| `tests/test_internet_search.py` | Query routing by scope, Hebrew query construction, output formatting, error handling, rate-limit sleep, API key header |
+| `tests/test_json_extraction.py` | Markdown fence stripping, whitespace handling, `sport_type` filter (keeps כדורסל/כדורגל, drops others), empty array, `JSONDecodeError` propagation |
+| `tests/test_deliver_podcast.py` | Telegram message content & formatting, Markdown bold titles, link inclusion, audio file upload, TTS voice model, `asyncio.run` call |
+| `tests/test_upload_firebase.py` | Firebase init branch (skip if already initialized), blob upload, 365-day signed URL, `System/LatestPodcast` document, old-news cleanup, new-item injection of `date`/`timestamp` |
+| `tests/test_pipeline_retry.py` | Successful first-attempt path, JSON error → 60s sleep → retry, general error → 300s sleep → retry, 4-attempt cap, no delivery on total failure, `sport_type` filter applied before delivery |
+
+---
+
 ## 🔑 Configuration Checklist for Deployment
 
 ### Backend Setup (`/backend`)
@@ -54,21 +88,19 @@ pip install crewai edge-tts requests python-dotenv firebase-admin
 
 **Environment Variables (`.env`):** Create a `backend/.env` file with the following keys:
 ```
-OPENROUTER_API_KEY=your_openrouter_api_key
-OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free   # or any OpenRouter model slug
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+GOOGLE_API_KEY=your_google_gemini_api_key
 SERPER_API_KEY=your_serper_api_key
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 ```
 
-**Pre-flight check:** Run `python openrouter_smoke_test.py` from the `backend/` directory to verify your OpenRouter key and model are reachable before running the full pipeline.
+**Pre-flight check:** Run `python openrouter_smoke_test.py` from the `backend/` directory to verify your API key and model are reachable before running the full pipeline.
 
 **Firebase Credentials:** Place the `firebase-key.json` service account file in the `backend/` root directory.
 
-Android Setup (/android)
-Open the /android folder in Android Studio.
+### Android Setup (`/maccabiApp`)
+Open the `/maccabiApp` folder in Android Studio.
 
-Firebase Connection: Download your google-services.json from the Firebase Console and place it in the app/ directory.
+**Firebase Connection:** Download your `google-services.json` from the Firebase Console and place it in the `app/` directory.
 
 Sync Gradle to download all dependencies (Compose, Hilt, Firebase, Media3/ExoPlayer).

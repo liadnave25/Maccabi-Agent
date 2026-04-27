@@ -373,49 +373,56 @@ def upload_to_firebase(news_items_list, audio_file_path, date_str):
     print(f"✅ Successfully uploaded {count} NEW news items to Firebase!")
 
 
-# --- Main Block ---
-if __name__ == "__main__":
+# --- Helpers ---
+def extract_news_items(raw_output: str) -> list:
+    clean = raw_output.replace("```json", "").replace("```", "").strip()
+    items = json.loads(clean)
+    valid_sports = ["כדורסל", "כדורגל"]
+    return [item for item in items if item.get("sport_type") in valid_sports]
+
+
+def run_pipeline():
     print(f"--- Starting Maccabi Agentic System for Target Date: {target_date_str} ---")
-    
-    max_attempts = 4  
+
+    max_attempts = 4
     attempt = 1
     success = False
-    
+
     while attempt <= max_attempts and not success:
         try:
             print(f"\n🚀 Attempt {attempt} of {max_attempts}...")
             result = maccabi_crew.kickoff()
-            
+
             print("\n--- RAW AI OUTPUT ---\n")
             raw_output = str(result.raw)
             print(raw_output)
-            
-            clean_json_string = raw_output.replace("```json", "").replace("```", "").strip()
-            news_items = json.loads(clean_json_string)
 
-            valid_sports = ["כדורסל", "כדורגל"]
-            news_items = [item for item in news_items if item.get("sport_type") in valid_sports]
-            
+            news_items = extract_news_items(raw_output)
             print(f"\n✅ Successfully parsed {len(news_items)} news items from AI.")
-            
+
             deliver_podcast_and_text(news_items)
             upload_to_firebase(news_items, "maccabi_daily.mp3", target_date_str)
-            
-            success = True 
-            
+
+            success = True
+
         except json.JSONDecodeError as e:
             print(f"\n❌ JSON Parsing Error on attempt {attempt}. Error: {e}")
             if attempt < max_attempts:
                 print("⏳ Waiting 60 seconds before retrying...")
-                time.sleep(60) 
+                time.sleep(60)
             attempt += 1
-            
+
         except Exception as e:
             print(f"\n❌ An error occurred on attempt {attempt} (e.g., Google 503 Overload): {e}")
             if attempt < max_attempts:
                 print("⏳ Google servers might be heavily loaded or rate limited. Waiting 5 minutes (300 seconds) before retrying...")
-                time.sleep(300) 
+                time.sleep(300)
             attempt += 1
-            
+
     if not success:
         print("\n❌ All attempts failed. The system is giving up for today.")
+
+
+# --- Main Block ---
+if __name__ == "__main__":
+    run_pipeline()
